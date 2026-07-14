@@ -1,0 +1,14 @@
+client_secret.json
+youtube_token.json
+google_credentials.json
+.env
+processed_videos.json
+logs/
+__pycache__/
+*.pyc
+*.pyo
+dist/
+*.egg-info/
+.eggs/
+build/
+*.bat

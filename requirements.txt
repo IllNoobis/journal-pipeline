@@ -1,0 +1,9 @@
+youtube-transcript-api>=1.2.4
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2
+gspread
+oauth2client
+anthropic
+pydantic>=2
+python-dotenv
