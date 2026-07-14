@@ -69,7 +69,7 @@ def _mtime_to_ist(file_path: Path) -> datetime:
 def build_title(file_path: Path) -> str:
     """Build the video title in DDMMYYYY HHMM format (IST)."""
     dt = _mtime_to_ist(file_path)
-    return f"{dt.strftime('%d%m%Y')} {dt.strftime('%H%M')}"
+    return f"Session: {dt.strftime('%d-%m-%Y')} {dt.strftime('%H:%M')}"
 
 
 # ── Upload ────────────────────────────────────────────────────────────────────
