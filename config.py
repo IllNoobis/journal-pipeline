@@ -20,7 +20,7 @@ SHEET_TAB: str = os.environ.get("SHEET_TAB", "Trades")
 YOUTUBE_CHANNEL_TITLE_PREFIX: str = os.environ.get("YOUTUBE_CHANNEL_TITLE_PREFIX", "Session")
 
 # ── LLM config ─────────────────────────────────────────────────────────────
-MODEL_NAME: str = "gemini-2.5-flash"
+MODEL_NAME: str = "gemini-3-flash-preview"
 
 # ── Caption polling ─────────────────────────────────────────────────────────
 CAPTION_POLL_INTERVAL_SECONDS: int = int(os.environ.get("CAPTION_POLL_INTERVAL_SECONDS", "600"))
