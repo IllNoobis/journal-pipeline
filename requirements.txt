@@ -4,6 +4,6 @@ google-auth-oauthlib
 google-auth-httplib2
 gspread
 oauth2client
-anthropic
+google-genai
 pydantic>=2
 python-dotenv

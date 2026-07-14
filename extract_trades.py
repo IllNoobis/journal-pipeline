@@ -3,6 +3,8 @@ Two-pass LLM trade extraction from timestamped transcripts.
 
 Pass 1 — Segmentation: classify trade windows as actual / theoretical / backtest.
 Pass 2 — Structured Extraction: extract Trade records from each actual window.
+
+Uses Google Gemini 2.5 Flash with structured output via response_schema.
 """
 import argparse
 import json
@@ -11,9 +13,10 @@ import sys
 import time
 from pathlib import Path
 
-from anthropic import Anthropic
+from google import genai
+from google.genai import types
 
-from config import ANTHROPIC_API_KEY, MODEL_NAME, LOGS_DIR
+from config import GEMINI_API_KEY, MODEL_NAME, LOGS_DIR
 from schemas import (
     CONFLUENCE_VOCAB,
     ExtractionResult,
@@ -71,13 +74,13 @@ def extract_transcript_slice(
 
 # ── LLM calls ────────────────────────────────────────────────────────────────
 
-_client: Anthropic | None = None
+_client: genai.Client | None = None
 
 
-def _get_client() -> Anthropic:
+def _get_client() -> genai.Client:
     global _client
     if _client is None:
-        _client = Anthropic(api_key=ANTHROPIC_API_KEY)
+        _client = genai.Client(api_key=GEMINI_API_KEY)
     return _client
 
 
@@ -123,32 +126,29 @@ Rules:
 - If a segment is ambiguous, classify it as the most likely option but note any uncertainty in your reasoning.
 
 Confluence vocabulary available for reference:
-{vocab_list}
+{vocab_list}"""
 
-Return your output as a JSON object matching this schema:
-{{
-  "windows": [
-    {{"start_offset": "HH:MM:SS", "end_offset": "HH:MM:SS", "classification": "actual|theoretical|backtest"}}
-  ]
-}}"""
+    user_prompt = f"Segment the following transcript into trade windows:\n\n{transcript_text}"
 
     client = _get_client()
-    parsed = _retry(
-        client.messages.parse,
+    response = _retry(
+        client.models.generate_content,
         model=MODEL_NAME,
-        messages=[
-            {"role": "user", "content": f"Segment the following transcript:\n\n{transcript_text}"}
-        ],
-        max_tokens=4096,
-        system=system_prompt,
-        output_format=SegmentationResult,
+        contents=user_prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            response_mime_type="application/json",
+            response_schema=SegmentationResult,
+            temperature=0.0,
+        ),
     )
 
-    if parsed.parsed_output is None:
-        raw = json.dumps([c.text for c in parsed.content if c.type == "text"])
-        raise RuntimeError(f"Segmentation pass returned unparseable output. Raw response: {raw}")
+    if response.parsed is None:
+        raise RuntimeError(
+            f"Segmentation pass returned unparseable output. Raw: {response.text}"
+        )
 
-    result: SegmentationResult = parsed.parsed_output
+    result: SegmentationResult = response.parsed
     actual = sum(1 for w in result.windows if w.classification == "actual")
     print(f"  Found {len(result.windows)} windows ({actual} actual, "
           f"{len(result.windows) - actual} theoretical/backtest)")
@@ -182,44 +182,29 @@ Field guidance:
 - notes: any additional context
 
 Confluence vocabulary:
-{vocab_list}
+{vocab_list}"""
 
-Return your output as a JSON object matching this schema:
-{{
-  "trades": [
-    {{
-      "time_offset": "HH:MM:SS",
-      "asset": "string",
-      "direction": "Long|Short",
-      "rr_planned": null_or_number,
-      "rr_realized": null_or_number,
-      "management_style": "aggressive_trailing|fixed_tp_sl|hybrid",
-      "account_type": "funded|personal",
-      "emotions": ["list of strings"],
-      "confluences": ["list of strings"],
-      "confidence": 0.0_to_1.0,
-      "notes": "string"
-    }}
-  ]
-}}"""
+    user_prompt = f"Extract trades from this transcript slice:\n\n{slice_text}"
 
     client = _get_client()
-    parsed = _retry(
-        client.messages.parse,
+    response = _retry(
+        client.models.generate_content,
         model=MODEL_NAME,
-        messages=[
-            {"role": "user", "content": f"Extract trades from this transcript slice:\n\n{slice_text}"}
-        ],
-        max_tokens=4096,
-        system=system_prompt,
-        output_format=ExtractionResult,
+        contents=user_prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            response_mime_type="application/json",
+            response_schema=ExtractionResult,
+            temperature=0.0,
+        ),
     )
 
-    if parsed.parsed_output is None:
-        raw = json.dumps([c.text for c in parsed.content if c.type == "text"])
-        raise RuntimeError(f"Extraction pass returned unparseable output. Raw response: {raw}")
+    if response.parsed is None:
+        raise RuntimeError(
+            f"Extraction pass returned unparseable output. Raw: {response.text}"
+        )
 
-    return parsed.parsed_output
+    return response.parsed
 
 
 # ── Orchestrator ──────────────────────────────────────────────────────────────

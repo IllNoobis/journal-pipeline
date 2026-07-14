@@ -8,9 +8,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── API keys ────────────────────────────────────────────────────────────────
-ANTHROPIC_API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "")
-if not ANTHROPIC_API_KEY:
-    raise RuntimeError("ANTHROPIC_API_KEY is missing from .env")
+GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
+if not GEMINI_API_KEY:
+    raise RuntimeError("GEMINI_API_KEY is missing from .env")
 
 # ── Sheets config ───────────────────────────────────────────────────────────
 SPREADSHEET_NAME: str = os.environ.get("SPREADSHEET_NAME", "Futures Trading Journal")
@@ -20,7 +20,7 @@ SHEET_TAB: str = os.environ.get("SHEET_TAB", "Trades")
 YOUTUBE_CHANNEL_TITLE_PREFIX: str = os.environ.get("YOUTUBE_CHANNEL_TITLE_PREFIX", "Session")
 
 # ── LLM config ─────────────────────────────────────────────────────────────
-MODEL_NAME: str = "claude-haiku-4-5-20251001"
+MODEL_NAME: str = "gemini-2.5-flash"
 
 # ── Caption polling ─────────────────────────────────────────────────────────
 CAPTION_POLL_INTERVAL_SECONDS: int = int(os.environ.get("CAPTION_POLL_INTERVAL_SECONDS", "600"))
