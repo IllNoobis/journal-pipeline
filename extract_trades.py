@@ -173,9 +173,12 @@ Field guidance:
 - asset: the instrument traded (NQ, ES, GC, CL, etc.)
 - direction: "Long" or "Short"
 - rr_planned: planned risk-reward ratio — only if explicitly stated
-- rr_realized: actual realized R:R — only if trade outcome is discussed
+- rr_realized: actual realized R:R — ONLY if trade outcome is discussed. POSITIVE for wins (e.g. 2.5), NEGATIVE for losses (e.g. -1.0). Must match trade_exit: if trade_exit is "TP", rr_realized > 0; if "SL", rr_realized < 0
 - management_style: "aggressive_trailing", "fixed_tp_sl", or "hybrid" — infer from how they describe managing the trade
-- account_type: "funded" or "personal" — only if mentioned
+- trade_duration: the approximate duration of the trade in minutes (e.g. "5m", "12m", "45m"). Infer from timestamps if entry/exit are discussed; null if unclear
+- trade_exit: "TP" if the trade hit take-profit, "SL" if it hit a hard stop-loss, "TSL" if it hit a trailing stop-loss — only if outcome is discussed. Must be consistent with rr_realized sign
+- pnl: the dollar profit/loss if mentioned — POSITIVE for wins, NEGATIVE for losses; null if not stated
+- account_type: "funded", "demo", or "eval" — only if mentioned
 - emotions: list of emotions evidenced by actual words/tone, NOT guessed
 - confluences: match spoken reasons to the closest vocabulary term below; novel tags OK if nothing matches
 - confidence: 0.0-1.0 reflecting how directly-stated vs inferred the fields are

@@ -12,10 +12,35 @@ Usage:
 """
 import argparse
 import json
+import logging
+import os
+import signal
 import sys
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
+
+# ── Logging setup ────────────────────────────────────────────────────────────
+LOGS_DIR_ROOT = Path(__file__).resolve().parent / "logs"
+LOGS_DIR_ROOT.mkdir(exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.FileHandler(LOGS_DIR_ROOT / "pipeline.log", encoding="utf-8"),
+    ],
+)
+logger = logging.getLogger("pipeline")
+
+
+def _sigint_handler(signum, frame):
+    """Force-exit on CTRL+C — bypasses blocking calls that swallow KeyboardInterrupt."""
+    print("\nInterrupted. Exiting immediately.", file=sys.stderr)
+    os._exit(130)
+
+signal.signal(signal.SIGINT, _sigint_handler)
 
 from config import (
     CAPTION_MAX_WAIT_MINUTES,
@@ -34,6 +59,7 @@ from wait_for_captions import wait_for_captions
 from fetch_transcript import format_transcript, save_transcript, fetch_and_format, YouTubeTranscriptApi
 from extract_trades import extract_trades
 import log_to_sheets
+import metrics_tab
 
 
 STAGES = ["upload", "transcript", "extract", "log"]
@@ -41,13 +67,13 @@ STAGE_ORDER = {s: i for i, s in enumerate(STAGES)}
 
 
 def _log_event(video_id: str, stage: str, message: str) -> None:
-    """Append a timestamped line to the pipeline log file."""
+    """Append a timestamped line to the pipeline log file and emit via logger."""
     log_path = LOGS_DIR / f"{video_id}_pipeline.log"
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     line = f"[{ts}] [{stage.upper()}] {message}\n"
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(line)
-    print(f"  {line.strip()}")
+    logger.info("[%s] %s", stage.upper(), message)
 
 
 def _load_transcript(video_id: str) -> str:
@@ -111,19 +137,25 @@ def run_pipeline(
                 print(f"Error: --from-stage {from_stage} requires --video-id since upload hasn't happened.", file=sys.stderr)
                 sys.exit(1)
 
+            print()
             print("=" * 60)
-            print("STAGE 1/4: UPLOAD TO YOUTUBE")
+            print("  STAGE 1/4: UPLOAD TO YOUTUBE")
             print("=" * 60)
             validate_creds_for("youtube")
             try:
                 from upload_to_youtube import build_title
                 title = build_title(source_path)
-                print(f"Title: {title}")
-                print(f"File: {source_path}")
+                size_mb = source_path.stat().st_size / (1024 * 1024)
+                print(f"  Title:    {title}")
+                print(f"  File:     {source_path.name} ({size_mb:.1f} MB)")
+                print(f"  Privacy:  unlisted")
+                print()
 
                 youtube = upload_to_youtube.get_youtube_client()
                 video_id = upload_to_youtube.upload_video(youtube, source_path, title)
                 state.mark_uploaded(STATE_FILE, video_id, str(source_path))
+                print(f"  Video ID: {video_id}")
+                print(f"  URL:      https://youtu.be/{video_id}")
                 _log_event(video_id, "upload", f"Uploaded: https://youtu.be/{video_id}")
             except Exception as exc:
                 _log_event(video_id or "unknown", "upload", f"FAILED: {exc}")
@@ -145,11 +177,13 @@ def run_pipeline(
     )
 
     if should_run_transcript:
-        print("\n" + "=" * 60)
-        print("STAGE 2/4: WAIT FOR CAPTIONS + FETCH TRANSCRIPT")
+        print()
+        print("=" * 60)
+        print("  STAGE 2/4: WAIT FOR CAPTIONS + FETCH TRANSCRIPT")
         print("=" * 60)
         try:
             validate_creds_for("youtube")  # needed for youtube-transcript-api indirectly
+            print(f"  Waiting for captions (polling every {CAPTION_POLL_INTERVAL_SECONDS}s, max {CAPTION_MAX_WAIT_MINUTES} min)...")
             ytt_api = YouTubeTranscriptApi()
             raw = wait_for_captions(
                 video_id,
@@ -161,6 +195,7 @@ def run_pipeline(
             save_transcript(video_id, formatted)
             state.mark_transcript_ready(STATE_FILE, video_id)
             current_status = "transcript_ready"
+            print(f"  Transcript ready: {len(formatted)} characters")
             _log_event(video_id, "transcript", f"Saved {len(formatted)} chars")
         except Exception as exc:
             _log_event(video_id, "transcript", f"FAILED: {exc}")
@@ -175,15 +210,19 @@ def run_pipeline(
 
     trades = []
     if should_run_extract:
-        print("\n" + "=" * 60)
-        print("STAGE 3/4: TWO-PASS LLM EXTRACTION")
+        print()
+        print("=" * 60)
+        print("  STAGE 3/4: TWO-PASS LLM EXTRACTION")
         print("=" * 60)
         try:
             transcript = _load_transcript(video_id)
+            print(f"  Transcript loaded: {len(transcript)} chars")
+            print(f"  Sending to Gemini (gemini-3-flash-preview)...")
             trades = extract_trades(transcript)
             _save_trades(video_id, trades)
             state.mark_extracted(STATE_FILE, video_id)
             current_status = "extracted"
+            print(f"  Extracted {len(trades)} trade(s)")
             _log_event(video_id, "extract", f"Extracted {len(trades)} trades")
         except Exception as exc:
             _log_event(video_id, "extract", f"FAILED: {exc}")
@@ -211,16 +250,21 @@ def run_pipeline(
         )
 
         if should_run_log:
-            print("\n" + "=" * 60)
-            print("STAGE 4/4: LOG TO GOOGLE SHEETS")
+            print()
+            print("=" * 60)
+            print("  STAGE 4/4: LOG TO GOOGLE SHEETS")
             print("=" * 60)
             try:
-                from config import GOOGLE_SHEETS_CREDS, SPREADSHEET_NAME, SHEET_TAB, STATE_FILE
+                from config import GOOGLE_SHEETS_CREDS, SPREADSHEET_NAME, SHEET_TAB
                 validate_creds_for("sheets")
+                print(f"  Connecting to Google Sheets...")
                 already = state.already_logged_offsets(STATE_FILE, video_id)
                 sheet = log_to_sheets.get_sheet(GOOGLE_SHEETS_CREDS, SPREADSHEET_NAME, SHEET_TAB)
+                to_log = len(trades) - sum(1 for t in trades if t.time_offset in already)
+                print(f"  Writing {to_log} new trade(s) to '{SHEET_TAB}' tab...")
                 rows_added = log_to_sheets.log_trades(sheet, trades, video_id, already)
                 state.mark_logged(STATE_FILE, video_id, [t.time_offset for t in trades])
+                print(f"  Done: {rows_added} rows added")
                 _log_event(video_id, "log", f"Added {rows_added} rows to sheet")
             except Exception as exc:
                 _log_event(video_id, "log", f"FAILED: {exc}")
@@ -231,23 +275,17 @@ def run_pipeline(
     auto = sum(1 for t in trades if t.confidence >= CONFIDENCE_THRESHOLD)
     review = len(trades) - auto
 
-    print("\n" + "=" * 60)
-    print("PIPELINE COMPLETE")
+    print()
     print("=" * 60)
-
-    if dry_run:
-        print(f"[DRY RUN] Would log {len(trades)} trades ({auto} auto, {review} needs review)")
-    else:
-        try:
-            from config import SPREADSHEET_NAME
-            sheet_url = f"https://docs.google.com/spreadsheets/d/{_get_sheet_id(video_id)}"
-        except Exception:
-            sheet_url = "<set up Google Sheet first>"
-        print(f"Logged {len(trades)} trades ({auto} auto, {review} needs review)")
-
-    print(f"Video: https://youtu.be/{video_id}")
-    print(f"Elapsed: {elapsed}")
-    print(f"Logs: {LOGS_DIR / f'{video_id}_pipeline.log'}")
+    print("  PIPELINE COMPLETE")
+    print("=" * 60)
+    print(f"  Video:    https://youtu.be/{video_id}")
+    print(f"  Trades:   {len(trades)} total ({auto} auto-logged, {review} needs review)")
+    print(f"  Duration: {elapsed}")
+    print(f"  Logs:     {LOGS_DIR / f'{video_id}_pipeline.log'}")
+    if not dry_run and video_id:
+        print(f"  Sheet:    https://docs.google.com/spreadsheets/d/11wElyn2GpO9E9x_62w3QobYvdJmESxP9Z-TsEUZOc94")
+    print()
 
 
 def _get_sheet_id(video_id: str) -> str:
@@ -280,7 +318,22 @@ def main():
         action="store_true",
         help="Run through extraction but don't write to Google Sheets.",
     )
+    parser.add_argument(
+        "--metrics-only",
+        action="store_true",
+        help="Recreate the Metrics and Options tabs (formulas auto-calc after creation).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force recreate existing tabs (use with --metrics-only).",
+    )
     args = parser.parse_args()
+
+    if args.metrics_only:
+        from config import SPREADSHEET_NAME
+        metrics_tab.setup_all_tabs(SPREADSHEET_NAME, force=args.force)
+        return
 
     if not args.video and not args.video_id:
         parser.error("Provide either a video file path or --video-id.")

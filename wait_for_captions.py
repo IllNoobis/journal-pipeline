@@ -2,6 +2,7 @@
 Polls YouTube for auto-caption readiness on a freshly uploaded video.
 Uses the instance-based youtube-transcript-api.
 """
+import logging
 import time
 import argparse
 
@@ -11,6 +12,8 @@ from youtube_transcript_api._errors import (
     TranscriptsDisabled,
     RequestBlocked,
     IpBlocked,
+    VideoUnplayable,
+    VideoUnavailable,
 )
 
 from config import (
@@ -18,6 +21,8 @@ from config import (
     CAPTION_MAX_WAIT_MINUTES,
     LOGS_DIR,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def wait_for_captions(
@@ -44,14 +49,26 @@ def wait_for_captions(
             fetched = ytt_api.fetch(video_id, languages=["en"])
             return fetched.to_raw_data()
         except NoTranscriptFound:
-            print(
-                f"Captions not ready yet for {video_id}, waiting {poll_interval_s}s..."
+            logger.info(
+                "Captions not ready yet for %s, waiting %ds...", video_id, poll_interval_s
+            )
+            time.sleep(poll_interval_s)
+            elapsed += poll_interval_s
+        except VideoUnplayable as exc:
+            reason = getattr(exc, "reason", "unknown")
+            logger.info(
+                "Video %s unplayable (%s), waiting %ds for processing...",
+                video_id, reason, poll_interval_s,
             )
             time.sleep(poll_interval_s)
             elapsed += poll_interval_s
         except TranscriptsDisabled:
             raise RuntimeError(
                 f"Captions disabled for video {video_id} — cannot proceed."
+            )
+        except VideoUnavailable:
+            raise RuntimeError(
+                f"Video {video_id} is no longer available — cannot fetch transcript."
             )
         except (RequestBlocked, IpBlocked):
             raise RuntimeError(
@@ -85,6 +102,12 @@ def main():
         help=f"Max minutes to wait (default: {CAPTION_MAX_WAIT_MINUTES})",
     )
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
     try:
         raw = wait_for_captions(

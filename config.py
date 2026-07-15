@@ -15,6 +15,7 @@ if not GEMINI_API_KEY:
 # ── Sheets config ───────────────────────────────────────────────────────────
 SPREADSHEET_NAME: str = os.environ.get("SPREADSHEET_NAME", "Futures Trading Journal")
 SHEET_TAB: str = os.environ.get("SHEET_TAB", "Trades")
+METRICS_TAB: str = os.environ.get("METRICS_TAB", "Metrics")
 
 # ── YouTube config ──────────────────────────────────────────────────────────
 YOUTUBE_CHANNEL_TITLE_PREFIX: str = os.environ.get("YOUTUBE_CHANNEL_TITLE_PREFIX", "Session")

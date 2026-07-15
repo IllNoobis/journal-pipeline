@@ -5,6 +5,7 @@ CLI:
     python upload_to_youtube.py uploads/session_2026-07-14.mp4
 """
 import argparse
+import logging
 import os
 import sys
 import time
@@ -16,6 +17,9 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+
+# Silence noisy OAuth library output
+logging.getLogger("google_auth_oauthlib.flow").setLevel(logging.WARNING)
 
 from config import (
     STATE_FILE,
@@ -45,12 +49,16 @@ def get_youtube_client() -> object:
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
+            print("  Refreshing expired YouTube token...")
             creds.refresh(Request())
+            print("  Token refreshed.")
         else:
+            print("  Opening browser for YouTube authentication...")
             flow = InstalledAppFlow.from_client_secrets_file(
                 str(YOUTUBE_CLIENT_SECRET), SCOPES
             )
             creds = flow.run_local_server(port=0)
+            print("  YouTube authentication complete.")
 
         with open(token_path, "w", encoding="utf-8") as f:
             f.write(creds.to_json())
@@ -98,6 +106,9 @@ def upload_video(youtube: object, file_path: Path, title: str) -> str:
     )
     request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
 
+    size_mb = file_path.stat().st_size / (1024 * 1024)
+    print(f"  Uploading '{file_path.name}' ({size_mb:.1f} MB)...")
+
     response = None
     error = None
     retry = 0
@@ -106,7 +117,11 @@ def upload_video(youtube: object, file_path: Path, title: str) -> str:
         try:
             status, response = request.next_chunk()
             if status:
-                print(f"  Upload progress: {int(status.progress() * 100)}%")
+                pct = int(status.progress() * 100)
+                bar_len = 30
+                filled = int(bar_len * pct / 100)
+                bar = "█" * filled + "░" * (bar_len - filled)
+                print(f"\r  Upload: |{bar}| {pct}%  ", end="", flush=True)
         except Exception as exc:
             if hasattr(exc, "resp") and getattr(exc, "resp", None) is not None:
                 if exc.resp.status in RETRIABLE_STATUS_CODES:
@@ -123,9 +138,10 @@ def upload_video(youtube: object, file_path: Path, title: str) -> str:
                 )
 
             sleep_secs = 2 ** retry
-            print(f"  Retrying in {sleep_secs}s (attempt {retry}/{MAX_RETRIES})...")
+            print(f"\n  Retrying in {sleep_secs}s (attempt {retry}/{MAX_RETRIES})...")
             time.sleep(sleep_secs)
 
+    print()
     return response["id"]
 
 

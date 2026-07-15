@@ -42,7 +42,10 @@ class Trade(BaseModel):
     rr_planned: Optional[float] = None
     rr_realized: Optional[float] = None
     management_style: Literal["aggressive_trailing", "fixed_tp_sl", "hybrid"]
-    account_type: Literal["funded", "personal"]
+    trade_duration: Optional[str] = None
+    trade_exit: Optional[Literal["TP", "SL", "TSL"]] = None
+    pnl: Optional[float] = None
+    account_type: Literal["funded", "demo", "eval"]
     emotions: list[str] = []
     confluences: list[str] = []
     confidence: float

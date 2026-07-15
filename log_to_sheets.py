@@ -16,26 +16,33 @@ from config import CONFIDENCE_THRESHOLD, GOOGLE_SHEETS_CREDS, SHEET_TAB, SPREADS
 from schemas import Trade
 from state import already_logged_offsets, mark_logged
 
+# Valid values for TP/SL and status columns
+VALID_TP_SL = {"TP", "SL", "TSL", ""}
+VALID_STATUS = {"Auto-logged", "Needs Review"}
+
 SCOPE = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive",
 ]
 
 HEADER = [
-    "video_link",
-    "time_offset",
-    "asset",
-    "direction",
-    "rr_planned",
-    "rr_realized",
-    "management_style",
-    "account_type",
-    "emotions",
-    "confluences",
-    "confidence",
-    "status",
-    "notes",
-    "video_id",
+    "video_link",       # A
+    "time_offset",      # B
+    "asset",            # C
+    "account_type",     # D
+    "direction",        # E
+    "trade_duration",   # F
+    "rr_planned",       # G
+    "rr_realized",      # H
+    "management_style", # I
+    "TP/SL",            # J
+    "PNL",              # K
+    "emotions",         # L
+    "confluences",      # M
+    "confidence",       # N
+    "status",           # O
+    "notes",            # P
+    "video_id",         # Q
 ]
 
 
@@ -53,25 +60,49 @@ def time_to_seconds(t_str: str) -> int:
 
 
 def trade_to_row(trade: Trade, video_id: str) -> list:
-    """Convert a Trade model into a sheet row matching HEADER order."""
+    """Convert a Trade model into a sheet row matching HEADER order.
+
+    Validates TP/SL and status values before building the row.
+    """
     seconds = time_to_seconds(trade.time_offset)
     video_link = f"https://youtu.be/{video_id}?t={seconds}"
     status = "Auto-logged" if trade.confidence >= CONFIDENCE_THRESHOLD else "Needs Review"
+
+    # Validate TP/SL
+    trade_exit = trade.trade_exit or ""
+    if trade_exit and trade_exit not in VALID_TP_SL:
+        print(f"  WARNING: Invalid TP/SL '{trade_exit}' at {trade.time_offset}, defaulting to empty")
+        trade_exit = ""
+
+    # Validate status
+    if status not in VALID_STATUS:
+        status = "Needs Review"
+
+    # Auto-infer TP/SL from rr_realized if not set
+    if not trade_exit and trade.rr_realized is not None:
+        if trade.rr_realized > 0:
+            trade_exit = "TP"
+        elif trade.rr_realized < 0:
+            trade_exit = "SL"
+
     return [
-        video_link,
-        trade.time_offset,
-        trade.asset,
-        trade.direction,
-        trade.rr_planned,
-        trade.rr_realized,
-        trade.management_style,
-        trade.account_type,
-        ", ".join(trade.emotions),
-        ", ".join(trade.confluences),
-        trade.confidence,
-        status,
-        trade.notes,
-        video_id,
+        video_link,         # A: video_link
+        trade.time_offset,  # B: time_offset
+        trade.asset,        # C: asset
+        trade.account_type, # D: account_type
+        trade.direction,    # E: direction
+        trade.trade_duration or "",  # F: trade_duration
+        trade.rr_planned,   # G: rr_planned
+        trade.rr_realized,  # H: rr_realized
+        trade.management_style,  # I: management_style
+        trade_exit,         # J: TP/SL
+        trade.pnl if trade.pnl is not None else "",  # K: PNL
+        ", ".join(trade.emotions),   # L: emotions
+        ", ".join(trade.confluences), # M: confluences
+        trade.confidence,   # N: confidence
+        status,             # O: status
+        trade.notes,        # P: notes
+        video_id,           # Q: video_id
     ]
 
 
