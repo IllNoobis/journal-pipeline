@@ -217,7 +217,7 @@ def run_pipeline(
         try:
             transcript = _load_transcript(video_id)
             print(f"  Transcript loaded: {len(transcript)} chars")
-            print(f"  Sending to Gemini (gemini-3-flash-preview)...")
+            print(f"  Sending to Gemini (gemini-3.5-flash)...")
             trades = extract_trades(transcript)
             _save_trades(video_id, trades)
             state.mark_extracted(STATE_FILE, video_id)

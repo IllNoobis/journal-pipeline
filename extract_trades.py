@@ -4,19 +4,27 @@ Two-pass LLM trade extraction from timestamped transcripts.
 Pass 1 — Segmentation: classify trade windows as actual / theoretical / backtest.
 Pass 2 — Structured Extraction: extract Trade records from each actual window.
 
-Uses Google Gemini 2.5 Flash with structured output via response_schema.
+Uses Google Gemini with structured output via response_schema.
+Falls back to MODEL_FALLBACK if primary model times out.
 """
 import argparse
 import json
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 
 from google import genai
 from google.genai import types
 
-from config import GEMINI_API_KEY, MODEL_NAME, LOGS_DIR
+from config import (
+    GEMINI_API_KEY,
+    MODEL_NAME,
+    MODEL_FALLBACK,
+    MODEL_TIMEOUT_MINUTES,
+    LOGS_DIR,
+)
 from schemas import (
     CONFLUENCE_VOCAB,
     ExtractionResult,
@@ -99,6 +107,52 @@ def _retry(fn, *args, retries: int = 3, **kwargs):
     raise RuntimeError(f"API call failed after {retries} attempts") from last_exc
 
 
+def _call_with_timeout(fn, *args, timeout_minutes: int = MODEL_TIMEOUT_MINUTES, **kwargs):
+    """Call *fn* in a thread with a timeout. Returns result or raises TimeoutError."""
+    result = [None]
+    exception = [None]
+
+    def target():
+        try:
+            result[0] = fn(*args, **kwargs)
+        except Exception as exc:
+            exception[0] = exc
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_minutes * 60)
+
+    if thread.is_alive():
+        raise TimeoutError(f"No response within {timeout_minutes} minutes")
+
+    if exception[0] is not None:
+        raise exception[0]
+    return result[0]
+
+
+def _generate_with_fallback(client, model, fallback_model, contents, config):
+    """Try primary model; if timeout or server error, auto-switch to fallback."""
+    try:
+        print(f"  Trying {model}...")
+        response = _call_with_timeout(
+            client.models.generate_content,
+            model=model,
+            contents=contents,
+            config=config,
+        )
+        return response
+    except (TimeoutError, Exception) as exc:
+        err_type = type(exc).__name__
+        print(f"  {model} failed ({err_type}: {exc}) — switching to {fallback_model}...")
+        response = _call_with_timeout(
+            client.models.generate_content,
+            model=fallback_model,
+            contents=contents,
+            config=config,
+        )
+        return response
+
+
 def run_segmentation_pass(transcript_text: str) -> SegmentationResult:
     """Pass 1: segment the transcript into trade windows with classifications."""
     print("Running segmentation pass...")
@@ -131,9 +185,10 @@ Confluence vocabulary available for reference:
     user_prompt = f"Segment the following transcript into trade windows:\n\n{transcript_text}"
 
     client = _get_client()
-    response = _retry(
-        client.models.generate_content,
+    response = _generate_with_fallback(
+        client,
         model=MODEL_NAME,
+        fallback_model=MODEL_FALLBACK,
         contents=user_prompt,
         config=types.GenerateContentConfig(
             system_instruction=system_prompt,
@@ -172,8 +227,8 @@ Field guidance:
 - time_offset: the timestamp of the trade entry or decision point (HH:MM:SS)
 - asset: the instrument traded (NQ, ES, GC, CL, etc.)
 - direction: "Long" or "Short"
-- rr_planned: planned risk-reward ratio — only if explicitly stated
-- rr_realized: actual realized R:R — ONLY if trade outcome is discussed. POSITIVE for wins (e.g. 2.5), NEGATIVE for losses (e.g. -1.0). Must match trade_exit: if trade_exit is "TP", rr_realized > 0; if "SL", rr_realized < 0
+- rr_planned: planned risk-reward ratio. CALCULATE from spoken entry, stop-loss, and take-profit prices when available. Formula: rr = (TP - entry) / (entry - SL) for Longs, rr = (entry - TP) / (SL - entry) for Shorts. If the trader says "entry at 5200, stop 5190, target 5230" → rr_planned = 3.0. Only null if no TP/SL prices are mentioned at all.
+- rr_realized: actual realized R:R — ONLY if trade outcome is discussed. CALCULATE from actual entry and exit prices if mentioned, or from rr_planned if the trade hit its target. POSITIVE for wins (e.g. 2.5), NEGATIVE for losses (e.g. -1.0). Must match trade_exit: if trade_exit is "TP", rr_realized > 0 and equals rr_planned; if "SL", rr_realized < 0 and equals -1.0 (full stop hit) or a partial loss fraction.
 - management_style: "aggressive_trailing", "fixed_tp_sl", or "hybrid" — infer from how they describe managing the trade
 - trade_duration: the approximate duration of the trade in minutes (e.g. "5m", "12m", "45m"). Infer from timestamps if entry/exit are discussed; null if unclear
 - trade_exit: "TP" if the trade hit take-profit, "SL" if it hit a hard stop-loss, "TSL" if it hit a trailing stop-loss — only if outcome is discussed. Must be consistent with rr_realized sign
@@ -190,9 +245,10 @@ Confluence vocabulary:
     user_prompt = f"Extract trades from this transcript slice:\n\n{slice_text}"
 
     client = _get_client()
-    response = _retry(
-        client.models.generate_content,
+    response = _generate_with_fallback(
+        client,
         model=MODEL_NAME,
+        fallback_model=MODEL_FALLBACK,
         contents=user_prompt,
         config=types.GenerateContentConfig(
             system_instruction=system_prompt,

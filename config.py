@@ -21,7 +21,9 @@ METRICS_TAB: str = os.environ.get("METRICS_TAB", "Metrics")
 YOUTUBE_CHANNEL_TITLE_PREFIX: str = os.environ.get("YOUTUBE_CHANNEL_TITLE_PREFIX", "Session")
 
 # ── LLM config ─────────────────────────────────────────────────────────────
-MODEL_NAME: str = "gemini-3-flash-preview"
+MODEL_NAME: str = "gemini-3.5-flash"
+MODEL_FALLBACK: str = "gemini-3-flash-preview"
+MODEL_TIMEOUT_MINUTES: int = int(os.environ.get("MODEL_TIMEOUT_MINUTES", "15"))
 
 # ── Caption polling ─────────────────────────────────────────────────────────
 CAPTION_POLL_INTERVAL_SECONDS: int = int(os.environ.get("CAPTION_POLL_INTERVAL_SECONDS", "600"))
